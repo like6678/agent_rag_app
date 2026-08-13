@@ -1,0 +1,30 @@
+{
+  "name": "agent-rag-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agent RAG 应用前端 - Umi Max + Ant Design",
+  "scripts": {
+    "dev": "node node_modules/@umijs/max/bin/max.js dev",
+    "build": "node node_modules/@umijs/max/bin/max.js build",
+    "start": "node node_modules/@umijs/max/bin/max.js dev",
+    "setup": "node node_modules/@umijs/max/bin/max.js setup",
+    "lint": "node node_modules/@umijs/max/bin/max.js lint"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.3.7",
+    "@umijs/max": "^4.3.18",
+    "antd": "^5.19.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
