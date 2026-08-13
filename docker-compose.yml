@@ -1,0 +1,184 @@
+# ============================================================
+# Agent RAG App - 基础设施编排
+# 组件: Milvus(向量库) + MinIO(文件存储) + Redis(会话记忆) + App
+# ============================================================
+
+services:
+  # -------------------- Milvus 依赖: etcd --------------------
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: agent-rag-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - agent-rag-net
+
+  # -------------------- MinIO: 文件存储 + Milvus 对象存储 --------------------
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: agent-rag-minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - agent-rag-net
+
+  # 创建 MinIO bucket 的初始化容器
+#  minio-init:
+#    image: registry.cn-hangzhou.aliyuncs.com/library/minio-mc:RELEASE.2024-05-09T16-59-14Z
+#    container_name: agent-rag-minio-init
+#    depends_on:
+#      minio:
+#        condition: service_healthy
+#    entrypoint: >
+#      /bin/sh -c "
+#      mc alias set local http://minio:9000 minioadmin minioadmin;
+#      mc mb local/documents --ignore-existing;
+#      mc mb local/aetcd --ignore-existing;
+#      echo 'MinIO buckets created.';
+#      "
+#    networks:
+#      - agent-rag-net
+
+  # -------------------- Milvus: 向量数据库 --------------------
+  milvus:
+    image: milvusdb/milvus:v2.5.10
+    container_name: agent-rag-milvus
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY: Zt8HbnSyC5RTW1d7
+      MINIO_SECRET_KEY: aaM10f2hRpoByL3go5CtSnfFq1FJUBtH
+      MINIO_USE_SSL: "false"
+      MINIO_BUCKET_NAME: aetcd
+    ports:
+      - "19530:19530"  # gRPC
+      - "9091:9091"    # metrics
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    networks:
+      - agent-rag-net
+
+  # -------------------- Redis: 会话记忆 (生产环境) --------------------
+  redis:
+    image: redis:7-alpine
+    container_name: agent-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-rag-net
+
+  # -------------------- MySQL: 长期记忆结构化存储 --------------------
+  mysql:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:8.0
+    container_name: agent-rag-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: agent_rag
+      MYSQL_USER: root
+      MYSQL_PASSWORD: 123456
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - agent-rag-net
+
+  # -------------------- FastAPI 应用 --------------------
+#  app:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+#    container_name: agent-rag-app
+#    environment:
+#      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+#      - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-plus}
+#      - DASHSCOPE_EMBED_MODEL=${DASHSCOPE_EMBED_MODEL:-text-embedding-v3}
+#      - MILVUS_HOST=milvus
+#      - MILVUS_PORT=19530
+#      - MINIO_ENDPOINT=minio:9000
+#      - MINIO_ACCESS_KEY=minioadmin
+#      - MINIO_SECRET_KEY=minioadmin
+#      - MINIO_BUCKET=documents
+#      - MINIO_SECURE=false
+#      - REDIS_URL=redis://redis:6379/0
+#      - MEMORY_BACKEND=${MEMORY_BACKEND:-memory}
+#      - UPLOAD_DIR=/app/data/uploads
+#      - DB_PATH=/app/data/app.db
+#    ports:
+#      - "8000:8000"
+#    volumes:
+#      - ./app:/app/app
+#      - ./data:/app/data
+#    depends_on:
+#      milvus:
+#        condition: service_healthy
+#      minio:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+#    networks:
+#      - agent-rag-net
+
+networks:
+  agent-rag-net:
+    driver: bridge
+
+volumes:
+  etcd_data:
+  minio_data:
+  milvus_data:
+  redis_data:
+  mysql_data:
