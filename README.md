@@ -165,7 +165,19 @@ cp .env.example .env
 ### 2. 一键启动
 
 ```bash
+#docker 环境安装
 docker-compose up -d
+
+#进入minIO服务，创建Access Keys 填入 docker-compose 的 milvus 中
+# 创建documents  Buckets
+
+
+#uv环境安装
+uv venv --python
+.venv\Scripts\activate   
+uv pip install -r requirements.txt
+
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 启动后会拉起以下服务：

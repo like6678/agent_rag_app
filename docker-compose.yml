@@ -72,8 +72,8 @@ services:
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY: Zt8HbnSyC5RTW1d7
-      MINIO_SECRET_KEY: aaM10f2hRpoByL3go5CtSnfFq1FJUBtH
+      MINIO_ACCESS_KEY: TxHqvJzBkND2aUIH
+      MINIO_SECRET_KEY: LU5JRtIw05bHBxKn8RNyJPH6B4jrNQpq
       MINIO_USE_SSL: "false"
       MINIO_BUCKET_NAME: aetcd
     ports:
@@ -97,7 +97,7 @@ services:
 
   # -------------------- Redis: 会话记忆 (生产环境) --------------------
   redis:
-    image: redis:7-alpine
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7.2-alpine
     container_name: agent-rag-redis
     ports:
       - "6379:6379"
@@ -117,10 +117,10 @@ services:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:8.0
     container_name: agent-rag-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: agent_rag
-      MYSQL_USER: root
-      MYSQL_PASSWORD: 123456
+#      MYSQL_USER: root
+#      MYSQL_PASSWORD: 123456
     ports:
       - "3306:3306"
     volumes:
@@ -134,43 +134,6 @@ services:
       start_period: 30s
     networks:
       - agent-rag-net
-
-  # -------------------- FastAPI 应用 --------------------
-#  app:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile
-#    container_name: agent-rag-app
-#    environment:
-#      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-#      - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-plus}
-#      - DASHSCOPE_EMBED_MODEL=${DASHSCOPE_EMBED_MODEL:-text-embedding-v3}
-#      - MILVUS_HOST=milvus
-#      - MILVUS_PORT=19530
-#      - MINIO_ENDPOINT=minio:9000
-#      - MINIO_ACCESS_KEY=minioadmin
-#      - MINIO_SECRET_KEY=minioadmin
-#      - MINIO_BUCKET=documents
-#      - MINIO_SECURE=false
-#      - REDIS_URL=redis://redis:6379/0
-#      - MEMORY_BACKEND=${MEMORY_BACKEND:-memory}
-#      - UPLOAD_DIR=/app/data/uploads
-#      - DB_PATH=/app/data/app.db
-#    ports:
-#      - "8000:8000"
-#    volumes:
-#      - ./app:/app/app
-#      - ./data:/app/data
-#    depends_on:
-#      milvus:
-#        condition: service_healthy
-#      minio:
-#        condition: service_healthy
-#      redis:
-#        condition: service_healthy
-#    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-#    networks:
-#      - agent-rag-net
 
 networks:
   agent-rag-net:
