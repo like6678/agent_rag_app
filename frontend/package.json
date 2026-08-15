@@ -1,0 +1,21 @@
+{
+  "name": "agent-rag-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "max dev",
+    "build": "max build",
+    "start": "max dev",
+    "setup": "max setup"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.3.7",
+    "@umijs/max": "^4.3.0",
+    "antd": "^5.17.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.5"
+  }
+}
