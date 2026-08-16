@@ -39,21 +39,25 @@ class MilvusService:
             return
 
         # 1. 定义 schema
+        from app.services.config_store import get_rag_config
+        dim = get_rag_config().get("embed_dim", settings.embed_dim)
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
         schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=64, is_primary=True)
-        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=settings.embed_dim)
+        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim)
         schema.add_field(field_name="text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(field_name="doc_id", datatype=DataType.VARCHAR, max_length=64)
         schema.add_field(field_name="source", datatype=DataType.VARCHAR, max_length=512)
         schema.add_field(field_name="chunk_index", datatype=DataType.INT64)
 
-        # 2. 准备索引参数
+        # 2. 准备索引参数(读取运行时配置: 索引类型/距离度量/nlist)
+        from app.services.config_store import get_rag_config
+        config = get_rag_config()
         index_params = MilvusClient.prepare_index_params()
         index_params.add_index(
             field_name="vector",
-            index_type="IVF_FLAT",
-            metric_type="COSINE",
-            params={"nlist": 128},
+            index_type=config.get("index_type", "IVF_FLAT"),
+            metric_type=config.get("search_metric", "COSINE"),
+            params={"nlist": config.get("nlist", 128)},
         )
 
         # 3. 创建集合(同时建立索引, MilvusClient 自动 load)
@@ -113,13 +117,25 @@ class MilvusService:
         向量检索
         Returns: [{"id", "score", "text", "doc_id", "source", "chunk_index"}]
         """
+        from app.services.config_store import get_rag_config
+        config = get_rag_config()
+        metric = config.get("search_metric", "COSINE")
+        # nprobe 仅对 IVF 系列索引有意义; HNSW 用 ef, FLAT 无需参数
+        index_type = config.get("index_type", "IVF_FLAT")
+        if index_type.startswith("IVF"):
+            search_params = {"metric_type": metric, "params": {"nprobe": config.get("nprobe", 16)}}
+        elif index_type == "HNSW":
+            search_params = {"metric_type": metric, "params": {"ef": max(config.get("nprobe", 16) * 4, 32)}}
+        else:
+            search_params = {"metric_type": metric}
+
         client = self._get_client()
         results = client.search(
             collection_name=settings.milvus_collection,
             data=[query_vector],
             anns_field="vector",
             limit=top_k,
-            search_params={"metric_type": "COSINE", "params": {"nprobe": 16}},
+            search_params=search_params,
             output_fields=["text", "doc_id", "source", "chunk_index"],
         )
 

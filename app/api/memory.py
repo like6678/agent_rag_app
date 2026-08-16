@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.post("", summary="新增长期记忆")
-async def add_memory(req: MemoryCreateRequest):
+def add_memory(req: MemoryCreateRequest):
     """新增记忆: 自动评分 + 相似度去重 + 向量化 + 存储"""
     try:
         result = long_term_memory.add_memory(
@@ -41,7 +41,7 @@ async def add_memory(req: MemoryCreateRequest):
 
 
 @router.get("/{user_id}", summary="列出用户记忆")
-async def list_memories(
+def list_memories(
     user_id: str,
     status: str = Query("active"),
     limit: int = Query(100, ge=1, le=500),
@@ -55,7 +55,7 @@ async def list_memories(
 
 
 @router.post("/search", summary="语义检索记忆")
-async def search_memory(req: MemorySearchRequest):
+def search_memory(req: MemorySearchRequest):
     """语义检索用户长期记忆(带 user_id 隔离 + 时间衰减)"""
     try:
         results = long_term_memory.search_memory(
@@ -71,7 +71,7 @@ async def search_memory(req: MemorySearchRequest):
 
 
 @router.get("/detail/{memory_id}", summary="获取单条记忆")
-async def get_memory(memory_id: str):
+def get_memory(memory_id: str):
     """获取单条记忆详情"""
     record = long_term_memory.get_memory(memory_id)
     if not record:
@@ -80,7 +80,7 @@ async def get_memory(memory_id: str):
 
 
 @router.patch("/{memory_id}", summary="更新记忆")
-async def update_memory(memory_id: str, req: MemoryUpdateRequest):
+def update_memory(memory_id: str, req: MemoryUpdateRequest):
     """更新记忆内容/重要度/摘要"""
     try:
         ok = long_term_memory.update_memory(
@@ -100,7 +100,7 @@ async def update_memory(memory_id: str, req: MemoryUpdateRequest):
 
 
 @router.delete("/{memory_id}", summary="删除记忆")
-async def delete_memory(memory_id: str):
+def delete_memory(memory_id: str):
     """删除记忆(MySQL + Milvus)"""
     try:
         ok = long_term_memory.delete_memory(memory_id)
@@ -115,7 +115,7 @@ async def delete_memory(memory_id: str):
 
 
 @router.post("/decay", summary="执行时间衰减遗忘")
-async def apply_decay(threshold: float = Query(0.05, ge=0, le=1)):
+def apply_decay(threshold: float = Query(0.05, ge=0, le=1)):
     """将衰减后重要度低于阈值的记忆标记为 forgotten"""
     try:
         count = long_term_memory.apply_decay(threshold)
@@ -126,7 +126,7 @@ async def apply_decay(threshold: float = Query(0.05, ge=0, le=1)):
 
 
 @router.post("/consolidate", summary="从短期记忆沉淀到长期记忆")
-async def consolidate(req: ConsolidateRequest):
+def consolidate(req: ConsolidateRequest):
     """从短期会话记忆中提取值得长期记住的信息, 存入长期记忆"""
     try:
         # 获取短期记忆消息

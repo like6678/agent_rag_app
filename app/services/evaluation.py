@@ -110,12 +110,10 @@ class EvaluationService:
         """评测单个问题"""
         top_k = config.get("retrieval_top_k", 4)
 
-        # 1. 检索
+        # 1. 检索(retriever 内部已按配置完成放大召回 + 重排,
+        #    与线上对话走同一条链路, 保证评测结果对生产有指导意义;
+        #    此前评测单独重排一次, 与真实链路不一致且重复消耗 LLM 调用)
         hits = retriever.search(question, top_k=top_k)
-
-        # 2. 重排(如果启用)
-        if config.get("rerank_enabled") and config.get("rerank_model") != "none":
-            hits = reranker.rerank(question, hits, method=config.get("rerank_model"), top_k=config.get("rerank_top_k", 3))
 
         retrieved_text = retriever.build_context(hits)
 

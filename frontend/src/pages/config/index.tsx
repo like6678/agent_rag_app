@@ -3,6 +3,7 @@ import {
   Card,
   Form,
   Select,
+  AutoComplete,
   InputNumber,
   Input,
   Switch,
@@ -149,21 +150,21 @@ const ConfigPage: React.FC = () => {
         <Card title="生成参数" style={{ marginBottom: 16 }}>
           <Row gutter={16}>
             <Col xs={24} sm={12}>
-              <Form.Item label="对话模型" name="dashscope_chat_model">
-                <Select options={objOptions(options.chat_models || [])} />
+              <Form.Item label="对话模型（可选预设或自定义）" name="dashscope_chat_model">
+                <AutoComplete options={objOptions(options.chat_models || [])} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} placeholder="如 qwen-plus 或自定义模型名" />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12}>
               <Form.Item
                 label={
                   <Space>
-                    嵌入模型
+                    嵌入模型（可选预设或自定义）
                     {config && <Tag color="blue">维度 {config.embed_dim}</Tag>}
                   </Space>
                 }
                 name="dashscope_embed_model"
               >
-                <Select options={objOptions(options.embed_models || [])} />
+                <AutoComplete options={objOptions(options.embed_models || [])} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} placeholder="如 text-embedding-v3 或自定义模型名" />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12}>

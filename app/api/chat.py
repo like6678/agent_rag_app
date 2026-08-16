@@ -12,7 +12,6 @@
 """
 import json
 import uuid
-from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Body
 from fastapi.responses import StreamingResponse
@@ -47,15 +46,18 @@ def _ensure_session(session_id: str, first_message: str = ""):
 
 # ==================== 对话接口 ====================
 
+# 注: 本模块端点均为同步 def —— FastAPI 会自动将同步端点放入线程池执行,
+# 避免 agent.chat 内的同步 LLM/检索调用阻塞事件循环(此前 def 会卡死所有并发请求)
 @router.post("", response_model=ChatResponse, summary="多轮对话(非流式)")
-async def chat(req: ChatRequest):
-    """多轮对话(支持 RAG + Function Call)"""
+def chat(req: ChatRequest):
+    """多轮对话(支持 RAG + Function Call + 长期记忆注入)"""
     try:
         _ensure_session(req.session_id, req.message)
         result = agent.chat(
             session_id=req.session_id,
             user_message=req.message,
             use_rag=req.use_rag,
+            user_id=req.user_id,
         )
         session_store.increment_message_count(req.session_id)
         return ChatResponse(
@@ -71,7 +73,7 @@ async def chat(req: ChatRequest):
 
 
 @router.post("/stream", summary="多轮对话(SSE 流式输出)")
-async def chat_stream(req: ChatRequest):
+def chat_stream(req: ChatRequest):
     """
     SSE 流式对话:
     - 逐 token 返回大模型生成内容
@@ -80,7 +82,8 @@ async def chat_stream(req: ChatRequest):
     """
     _ensure_session(req.session_id, req.message)
 
-    async def event_generator() -> AsyncGenerator[str, None]:
+    # 同步生成器: StreamingResponse 会自动放到线程池迭代, 不阻塞事件循环
+    def event_generator():
         try:
             # 1. 获取历史记忆
             history = memory_store.get_messages(req.session_id)
@@ -92,6 +95,16 @@ async def chat_stream(req: ChatRequest):
 
             # 2. 记录用户消息
             memory_store.add_message(req.session_id, "user", req.message)
+
+            # 2.5 注入长期记忆(提供 user_id 时)
+            if req.user_id:
+                try:
+                    from app.agent.core import _recall_long_term_memories
+                    ltm_context = _recall_long_term_memories(req.user_id, req.message)
+                    if ltm_context:
+                        messages.append({"role": "system", "content": ltm_context})
+                except Exception as e:
+                    logger.warning(f"流式对话长期记忆召回失败: {e}")
 
             # 3. RAG 检索增强(如果启用)
             rag_context = ""
@@ -169,14 +182,14 @@ _RAG_SYSTEM_PROMPT = """你是一个智能助手,可以使用检索到的知识�
 # ==================== 会话管理 ====================
 
 @router.get("/sessions", summary="获取会话列表")
-async def list_sessions():
+def list_sessions():
     """列出所有会话(按更新时间倒序)"""
     sessions = session_store.list_sessions()
     return {"total": len(sessions), "sessions": sessions}
 
 
 @router.post("/sessions", summary="创建新会话")
-async def create_session(title: str = Body("新对话", embed=True)):
+def create_session(title: str = Body("新对话", embed=True)):
     """创建新会话, 返回 session_id"""
     session_id = str(uuid.uuid4())
     session = session_store.create_session(session_id, title=title)
@@ -184,7 +197,7 @@ async def create_session(title: str = Body("新对话", embed=True)):
 
 
 @router.patch("/sessions/{session_id}", summary="更新会话标题")
-async def update_session_title(session_id: str, title: str = Body(..., embed=True)):
+def update_session_title(session_id: str, title: str = Body(..., embed=True)):
     """更新会话标题"""
     ok = session_store.update_session(session_id, title=title)
     if not ok:
@@ -193,7 +206,7 @@ async def update_session_title(session_id: str, title: str = Body(..., embed=Tru
 
 
 @router.delete("/sessions/{session_id}", summary="删除会话")
-async def delete_session(session_id: str):
+def delete_session(session_id: str):
     """删除会话(元数据 + 记忆)"""
     session_store.delete_session(session_id)
     memory_store.clear(session_id)
@@ -203,21 +216,21 @@ async def delete_session(session_id: str):
 # ==================== 历史 & 清空(兼容旧接口) ====================
 
 @router.get("/history/{session_id}", response_model=ChatHistoryResponse, summary="获取会话历史")
-async def get_history(session_id: str):
+def get_history(session_id: str):
     """获取指定会话的全部历史消息"""
     messages = agent.get_history(session_id)
     return ChatHistoryResponse(session_id=session_id, messages=messages)
 
 
 @router.delete("/{session_id}", summary="清空会话记忆")
-async def clear_session(session_id: str):
+def clear_session(session_id: str):
     """清空指定会话的记忆(不删除会话元数据)"""
     agent.reset_session(session_id)
     return {"session_id": session_id, "message": "会话记忆已清空"}
 
 
 @router.post("/new-session", summary="生成新会话ID")
-async def new_session():
+def new_session():
     """生成新会话ID(自动创建会话记录)"""
     session_id = str(uuid.uuid4())
     session_store.create_session(session_id, title="新对话")

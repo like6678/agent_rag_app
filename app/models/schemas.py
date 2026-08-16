@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     session_id: str = Field(..., description="会话ID,用于隔离多轮对话记忆", examples=["session-001"])
     message: str = Field(..., description="用户消息", examples=["什么是 RAG?"])
     use_rag: bool = Field(True, description="是否启用 RAG + 工具调用")
+    user_id: Optional[str] = Field(None, description="用户ID(可选, 提供后自动注入相关长期记忆)")
 
 
 class ToolCallInfo(BaseModel):

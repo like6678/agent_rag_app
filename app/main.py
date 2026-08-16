@@ -71,8 +71,10 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
+    # 注意: allow_origins=["*"] 与 allow_credentials=True 是非法组合,
+    # 浏览器会直接拒绝响应。本项目为纯 Bearer/无 Cookie 的 API, 关闭 credentials 即可。
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

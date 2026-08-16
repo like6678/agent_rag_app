@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.post("/run", response_model=EvalReport, summary="执行 RAG 评测")
-async def run_evaluation(req: EvalRequest):
+def run_evaluation(req: EvalRequest):
     """
     执行 RAG 系统评测
 

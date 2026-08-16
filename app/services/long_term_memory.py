@@ -188,20 +188,27 @@ class LongTermMemoryService:
                 (memory_id,),
             )
 
+            # 融合打分: 语义相似度为主, 衰减后重要度为辅(避免只按相似度排序时,
+            # 高重要度但表述不精确匹配的记忆被挤出 top_k)
+            similarity = float(hit.get("score", 0))
+            fused_score = 0.7 * similarity + 0.3 * decayed_score
+
             results.append({
                 "memory_id": memory_id,
                 "content": record["content"],
                 "summary": record.get("summary", ""),
                 "importance_score": round(decayed_score, 4),
                 "original_importance": record["importance_score"],
-                "similarity": hit.get("score", 0),
+                "similarity": round(similarity, 4),
+                "fused_score": round(fused_score, 4),
                 "access_count": record["access_count"] + 1,
                 "created_at": str(record["created_at"]),
                 "last_accessed_at": str(record["last_accessed_at"]),
             })
 
-            if len(results) >= top_k:
-                break
+        # 按融合分排序后截断 top_k(原先直接按 Milvus 相似度顺序截断)
+        results.sort(key=lambda x: x["fused_score"], reverse=True)
+        results = results[:top_k]
 
         logger.info(f"长期记忆检索: user={user_id}, query='{query[:30]}...' -> {len(results)} 条")
         return results

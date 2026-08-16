@@ -13,6 +13,22 @@ from app.agent.tools import TOOLS_SCHEMA, execute_tool
 from app.config import settings
 
 
+def _recall_long_term_memories(user_id: str, query: str, top_k: int = 3) -> str:
+    """语义召回用户的相关长期记忆, 拼接为 system 上下文
+    失败(如 Milvus/MySQL 未就绪)时静默降级, 不影响主对话流程
+    """
+    try:
+        from app.services.long_term_memory import long_term_memory
+        memories = long_term_memory.search_memory(user_id=user_id, query=query, top_k=top_k)
+        if not memories:
+            return ""
+        lines = [f"- {m['content']} (重要度: {m['importance_score']:.2f})" for m in memories]
+        return "以下是该用户的长期记忆(偏好/事实/历史决策), 回答时请结合参考:\n" + "\n".join(lines)
+    except Exception as e:
+        logger.warning(f"长期记忆召回失败(降级跳过): {e}")
+        return ""
+
+
 SYSTEM_PROMPT = """你是一个智能助手,可以调用工具来回答用户问题。
 
 你可以使用以下能力:
@@ -39,6 +55,7 @@ class Agent:
         session_id: str,
         user_message: str,
         use_rag: bool = True,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         多轮对话主入口
@@ -47,6 +64,7 @@ class Agent:
             session_id: 会话ID(用于记忆隔离)
             user_message: 用户消息
             use_rag: 是否启用 RAG + 工具调用
+            user_id: 用户ID(可选, 提供后注入相关长期记忆)
         Returns:
             {"answer": str, "tool_calls_made": list, "session_id": str}
         """
@@ -55,6 +73,13 @@ class Agent:
 
         # 2. 构建消息列表
         messages: List[Dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+        # 2.1 注入长期记忆(语义召回与当前问题相关的用户记忆)
+        if user_id:
+            ltm_context = _recall_long_term_memories(user_id, user_message)
+            if ltm_context:
+                messages.append({"role": "system", "content": ltm_context})
+
         messages.extend(history)
         messages.append({"role": "user", "content": user_message})
 
@@ -98,8 +123,11 @@ class Agent:
                 tool_calls_made.append({"name": tool_name, "arguments": tool_args, "result_preview": tool_result[:200]})
 
                 # 将工具结果作为 tool 角色消息加入对话
+                # 必须携带 tool_call_id, 与 assistant 消息中的 tool_calls 一一对应,
+                # 否则 OpenAI 兼容接口在下一轮请求会报 400 (协议要求)
                 messages.append({
                     "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
                     "content": tool_result,
                     "name": tool_name,
                 })

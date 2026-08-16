@@ -1,4 +1,4 @@
-import { message } from 'antd';
+﻿import { message } from 'antd';
 
 /* ============ HTTP 基础封装 ============ */
 export async function http<T>(url: string, options?: RequestInit): Promise<T> {
@@ -42,6 +42,7 @@ export interface ChatRequest {
   session_id: string;
   message: string;
   use_rag: boolean;
+  user_id?: string;
 }
 export interface ChatResponse {
   session_id: string;

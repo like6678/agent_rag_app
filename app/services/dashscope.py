@@ -215,38 +215,56 @@ class DashScopeService:
         }
 
         all_vectors: List[List[float]] = []
-        batch_size = 25
+        url = f"{base_url}/embeddings"
+        # 不同模型单次批量上限不同: text-embedding-v3 允许 25, qwen3.7-text-embedding 仅允许 20。
+        # 取 20 作为安全默认; 若仍触发 batch size 限制, _embed_batch 会自动减半重试。
+        batch_size = 20
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            payload = {
-                "model": embed_model,
-                "input": batch,
-            }
-            url = f"{base_url}/embeddings"
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=120)
-            except requests.RequestException as e:
-                logger.error(f"Embedding 网络请求异常: {e}")
-                raise RuntimeError(f"向量化网络请求异常: {e}")
-
-            try:
-                result = response.json()
-            except ValueError:
-                raise RuntimeError(f"向量化返回非 JSON 响应(HTTP {response.status_code})")
-
-            if response.status_code != 200:
-                error = result.get("error", {})
-                error_msg = error.get("message", "") or response.text[:300]
-                logger.error(
-                    f"Embedding 失败: model={embed_model}, code={error.get('code')}, msg={error_msg}"
-                )
-                raise RuntimeError(f"向量化失败: {error_msg}")
-
-            for item in result.get("data", []):
-                all_vectors.append(item["embedding"])
+            all_vectors.extend(self._embed_batch(batch, url, headers, embed_model))
 
         logger.info(f"向量化完成: {len(texts)} 段文本 -> {len(all_vectors)} 个向量")
         return all_vectors
+
+    def _embed_batch(
+        self,
+        batch: List[str],
+        url: str,
+        headers: Dict[str, str],
+        embed_model: str,
+    ) -> List[List[float]]:
+        """单批向量化, 遇到 batch size 超限错误时自动减半重试(最多到 1)"""
+        payload = {"model": embed_model, "input": batch}
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+        except requests.RequestException as e:
+            logger.error(f"Embedding 网络请求异常: {e}")
+            raise RuntimeError(f"向量化网络请求异常: {e}")
+
+        try:
+            result = response.json()
+        except ValueError:
+            raise RuntimeError(f"向量化返回非 JSON 响应(HTTP {response.status_code})")
+
+        if response.status_code != 200:
+            error = result.get("error", {})
+            error_msg = error.get("message", "") or response.text[:300]
+            # 批大小超限: 拆成两半递归重试, 兼容不同模型上限
+            if "batch size" in error_msg.lower() and len(batch) > 1:
+                mid = len(batch) // 2
+                logger.warning(
+                    f"Embedding 批大小超限(batch={len(batch)}), 减半重试: model={embed_model}"
+                )
+                return self._embed_batch(batch[:mid], url, headers, embed_model) + self._embed_batch(
+                    batch[mid:], url, headers, embed_model
+                )
+            logger.error(
+                f"Embedding 失败: model={embed_model}, code={error.get('code')}, msg={error_msg}"
+            )
+            raise RuntimeError(f"向量化失败: {error_msg}")
+
+        # DashScope 返回的 data 按 input 顺序排列, 取 embedding
+        return [item["embedding"] for item in result.get("data", [])]
 
     def embed_query(self, text: str) -> List[float]:
         """单条查询向量化"""

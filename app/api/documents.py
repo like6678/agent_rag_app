@@ -8,8 +8,10 @@
 - DELETE /api/documents/{doc_id}        删除文档(MinIO + Milvus + DB 联动)
 """
 import os
+import re
 import uuid
 import hashlib
+from urllib.parse import quote
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import Response
@@ -31,24 +33,36 @@ from app.rag.embedder import embedder
 
 router = APIRouter()
 
+
+def _content_disposition(disposition: str, filename: str) -> str:
+    """生成 Content-Disposition 头, 兼容中文等非 ASCII 文件名。
+
+    HTTP 头必须是 latin-1 可编码的 ASCII 文本, 中文文件名直接放入会抛
+    UnicodeEncodeError。标准做法(RFC 5987):
+      filename="ascii兜底"  +  filename*=UTF-8''<URL编码后的真实文件名>
+    现代浏览器会优先读取 filename*, 从而正确显示中文文件名。
+    """
+    ascii_name = re.sub(r"[^\x20-\x7e]", "_", filename) or "file"
+    encoded = quote(filename, safe="")
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
 
 
-async def _compute_md5(file:UploadFile) -> tuple[str, int]:
-    """计算文件的 MD5"""
-    md5_obj=hashlib.md5()
+def _compute_md5(file: UploadFile) -> tuple[str, int]:
+    """计算文件的 MD5(同步分块读取底层 SpooledTemporaryFile)"""
+    md5_obj = hashlib.md5()
     total_size = 0
-    chunk_size=65536
-    # 1.异步分块读取文件
-    while chunk:=await file.read(chunk_size):
+    chunk_size = 65536
+    while chunk := file.file.read(chunk_size):
         md5_obj.update(chunk)
-        total_size+=len(chunk)
-    await file.seek(0)
-    return md5_obj.hexdigest(),total_size
+        total_size += len(chunk)
+    file.file.seek(0)
+    return md5_obj.hexdigest(), total_size
 
 
 @router.post("/upload", response_model=DocumentProcessResult, summary="上传文档(MD5去重)")
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     split_method: str = Form(None, description="切片方式: recursive/fixed/semantic/structure/sentence/llm"),
 ):
@@ -73,7 +87,7 @@ async def upload_document(
 
     try:
         # 1.优化文件转MD5的计算(并且计算文件的大小)
-        file_md5, file_size  =await _compute_md5(file)
+        file_md5, file_size = _compute_md5(file)
         content_type = file.content_type or "application/octet-stream"
 
         # 2. 去重检查: 数据库中已存在相同 MD5 则跳过
@@ -94,7 +108,7 @@ async def upload_document(
             )
 
         # 3. 上传到 MinIO(待优化,大文件切片上传)
-        content=file.read()
+        content = file.file.read()
         doc_id = str(uuid.uuid4())
         object_name = f"{doc_id}_{filename}"
         minio_service.upload_bytes(
@@ -103,41 +117,52 @@ async def upload_document(
             content_type=content_type,
         )
 
-        # 4. 加载文档文本
-        text = document_loader.load_bytes(content, ext)
-        char_count = len(text)
+        # 3.1 此后任何一步失败都必须回滚(删除 MinIO 文件 + 已写入的 Milvus 向量),
+        #     否则会产生孤儿文件/向量, 且因数据库无记录无法通过界面清理
+        try:
+            # 4. 加载文档文本
+            text = document_loader.load_bytes(content, ext)
+            char_count = len(text)
 
-        if not text.strip():
-            # 内容为空,回滚 MinIO 文件
-            minio_service.delete(object_name)
-            raise HTTPException(status_code=400, detail="文档内容为空或无法解析")
+            if not text.strip():
+                raise HTTPException(status_code=400, detail="文档内容为空或无法解析")
 
-        # 5. 文本切分(支持指定切片方式)
-        config = get_rag_config()
-        effective_method = split_method or config.get("split_method", "recursive")
-        llm_fn = llm_split_callback if effective_method == "llm" else None
-        chunks = text_splitter.split(text, method=effective_method, llm_split_fn=llm_fn)
-        if not chunks:
-            minio_service.delete(object_name)
-            raise HTTPException(status_code=400, detail="文档切分后无有效内容")
+            # 5. 文本切分(支持指定切片方式)
+            config = get_rag_config()
+            effective_method = split_method or config.get("split_method", "recursive")
+            llm_fn = llm_split_callback if effective_method == "llm" else None
+            chunks = text_splitter.split(text, method=effective_method, llm_split_fn=llm_fn)
+            if not chunks:
+                raise HTTPException(status_code=400, detail="文档切分后无有效内容")
 
-        # 6. 向量化
-        vectors = embedder.embed_documents(chunks)
+            # 6. 向量化
+            vectors = embedder.embed_documents(chunks)
 
-        # 7. 存入 Milvus
-        records = []
-        for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
-            records.append(
-                {
-                    "id": f"{doc_id}_{i}",
-                    "vector": vector,
-                    "text": chunk,
-                    "doc_id": doc_id,
-                    "source": filename,
-                    "chunk_index": i,
-                }
-            )
-        milvus_service.insert(records)
+            # 7. 存入 Milvus
+            records = []
+            for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+                records.append(
+                    {
+                        "id": f"{doc_id}_{i}",
+                        "vector": vector,
+                        "text": chunk,
+                        "doc_id": doc_id,
+                        "source": filename,
+                        "chunk_index": i,
+                    }
+                )
+            milvus_service.insert(records)
+        except Exception:
+            # 回滚: 先删 Milvus 向量(可能部分写入), 再删 MinIO 文件
+            try:
+                milvus_service.delete_by_doc_id(doc_id)
+            except Exception:
+                pass
+            try:
+                minio_service.delete(object_name)
+            except Exception:
+                pass
+            raise
 
         # 8. 元数据写入数据库
         db_service.add_document(
@@ -178,7 +203,7 @@ async def upload_document(
 
 
 @router.get("", response_model=DocumentListResponse, summary="列出所有文档")
-async def list_documents():
+def list_documents():
     """从数据库列出所有已上传文档的元数据"""
     docs = db_service.list_documents()
     return DocumentListResponse(
@@ -188,7 +213,7 @@ async def list_documents():
 
 
 @router.get("/{doc_id}", response_model=DocumentInfo, summary="查询单个文档详情")
-async def get_document(doc_id: str):
+def get_document(doc_id: str):
     """按 doc_id 查询文档元数据"""
     doc = db_service.get_by_doc_id(doc_id)
     if doc is None:
@@ -197,7 +222,7 @@ async def get_document(doc_id: str):
 
 
 @router.get("/{doc_id}/download", summary="下载文档")
-async def download_document(doc_id: str):
+def download_document(doc_id: str):
     """按 doc_id 下载文档文件(附件方式)"""
     doc = db_service.get_by_doc_id(doc_id)
     if doc is None:
@@ -210,7 +235,7 @@ async def download_document(doc_id: str):
             content=data,
             media_type=doc.get("content_type") or "application/octet-stream",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": _content_disposition("attachment", filename),
                 "Content-Length": str(len(data)),
             },
         )
@@ -220,7 +245,7 @@ async def download_document(doc_id: str):
 
 
 @router.get("/{doc_id}/preview", summary="在线预览文档")
-async def preview_document(doc_id: str):
+def preview_document(doc_id: str):
     """按 doc_id 在线预览文档(浏览器内联显示,适合 PDF/TXT/MD)"""
     doc = db_service.get_by_doc_id(doc_id)
     if doc is None:
@@ -233,7 +258,7 @@ async def preview_document(doc_id: str):
             content=data,
             media_type=doc.get("content_type") or "application/octet-stream",
             headers={
-                "Content-Disposition": f'inline; filename="{filename}"',
+                "Content-Disposition": _content_disposition("inline", filename),
                 "Content-Length": str(len(data)),
             },
         )
@@ -243,7 +268,7 @@ async def preview_document(doc_id: str):
 
 
 @router.delete("/{doc_id}", response_model=DocumentDeleteResponse, summary="删除文档")
-async def delete_document(doc_id: str):
+def delete_document(doc_id: str):
     """
     删除文档(三方联动):
     1. 从数据库删除元数据

@@ -5,10 +5,29 @@ MySQL 连接服务 (长期记忆结构化存储)
 - 提供查询/执行接口
 """
 import threading
+from datetime import datetime, date
+from decimal import Decimal
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
 from app.config import settings
+
+
+def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """统一序列化 MySQL 行: datetime/date -> ISO 字符串, Decimal -> float, bytes -> utf-8 字符串
+    避免下游 Pydantic 模型(str 字段)或 JSON 序列化失败
+    """
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, (datetime, date)):
+            out[k] = v.isoformat(sep=" ") if isinstance(v, datetime) else v.isoformat()
+        elif isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, (bytes, bytearray)):
+            out[k] = v.decode("utf-8", errors="ignore")
+        else:
+            out[k] = v
+    return out
 
 
 class MySQLService:
@@ -85,7 +104,7 @@ class MySQLService:
             with conn.cursor() as cursor:
                 cursor.execute(sql, args)
                 rows = cursor.fetchall()
-                return [dict(r) for r in rows] if rows else []
+                return [_serialize_row(dict(r)) for r in rows] if rows else []
         finally:
             conn.close()
 
@@ -96,7 +115,7 @@ class MySQLService:
             with conn.cursor() as cursor:
                 cursor.execute(sql, args)
                 row = cursor.fetchone()
-                return dict(row) if row else None
+                return _serialize_row(dict(row)) if row else None
         finally:
             conn.close()
 

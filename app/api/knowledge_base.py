@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/stats", response_model=KBStatsResponse, summary="知识库统计")
-async def kb_stats():
+def kb_stats():
     """获取知识库(向量集合)的统计信息"""
     try:
         stats = milvus_service.stats()
@@ -31,7 +31,7 @@ async def kb_stats():
 
 
 @router.delete("/collection", summary="清空知识库(重建集合)")
-async def reset_collection():
+def reset_collection():
     """
     删除当前集合并重新创建空集合
     同步清空数据库中的文档元数据记录
@@ -55,7 +55,7 @@ async def reset_collection():
 
 
 @router.post("/search", summary="检索测试")
-async def kb_search(
+def kb_search(
     query: str = Body(..., embed=True, description="检索查询"),
     top_k: int = Body(4, embed=True, description="返回数量"),
 ):
