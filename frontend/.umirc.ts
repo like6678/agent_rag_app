@@ -4,6 +4,7 @@ export default defineConfig({
   antd: {},
   npmClient: 'npm',
   title: 'Agent RAG 智能问答',
+  favicons: ['/favicon.svg'],
   routes: [
     { path: '/', redirect: '/dashboard' },
     { path: '/dashboard', component: './dashboard' },

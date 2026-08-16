@@ -18,10 +18,10 @@ body {
   min-height: calc(100vh - 96px);
   border-radius: 28px;
   padding: 28px 30px;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(255, 255, 255, var(--glass-alpha, 0.045));
   border: 1px solid rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(26px) saturate(150%);
-  -webkit-backdrop-filter: blur(26px) saturate(150%);
+  backdrop-filter: blur(var(--glass-blur, 26px)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 26px)) saturate(150%);
   box-shadow:
     0 24px 70px rgba(0, 0, 0, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -37,11 +37,11 @@ body {
 .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
 /* 大圆角毛玻璃卡片: 弱化边框, 靠透明度 + 柔和 glow */
 .ant-card {
-  background: rgba(255, 255, 255, 0.035) !important;
+  background: rgba(255, 255, 255, calc(var(--glass-alpha, 0.045) * 0.78)) !important;
   border: 1px solid rgba(255, 255, 255, 0.06) !important;
   border-radius: 20px !important;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(calc(var(--glass-blur, 26px) * 0.6)) saturate(140%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur, 26px) * 0.6)) saturate(140%);
   box-shadow: 0 10px 36px rgba(0, 0, 0, 0.22);
 }
 .ant-card-head {
@@ -103,7 +103,7 @@ body {
   box-shadow: 0 8px 26px rgba(41, 151, 255, 0.12);
 }
 .chat-bubble.assistant {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, calc(var(--glass-alpha, 0.045) * 1.1));
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: #dbe4f0;
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.18);

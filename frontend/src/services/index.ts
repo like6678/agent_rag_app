@@ -1,4 +1,4 @@
-﻿import { message } from 'antd';
+import { message } from 'antd';
 
 /* ============ HTTP 基础封装 ============ */
 export async function http<T>(url: string, options?: RequestInit): Promise<T> {
@@ -265,7 +265,7 @@ export const evalApi = {
 
 /* ============ 健康 ============ */
 export const healthApi = {
-  check: () => http<any>('/health'),
+  check: () => http<any>('/api/health'),
 };
 
 export function errorMsg(e: unknown) {

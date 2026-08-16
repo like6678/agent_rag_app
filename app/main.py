@@ -93,11 +93,20 @@ async def root():
     return {"status": "ok", "service": "Agent RAG App", "version": "1.0.0"}
 
 
-@app.get("/health", tags=["健康检查"])
-async def health():
+def _health_payload():
     return {
         "status": "healthy",
         "milvus": settings.milvus_host,
         "minio": settings.minio_endpoint,
         "memory_backend": settings.memory_backend,
     }
+
+
+@app.get("/health", tags=["健康检查"])
+async def health():
+    return _health_payload()
+
+
+@app.get("/api/health", tags=["健康检查"])
+async def health_api():
+    return _health_payload()
