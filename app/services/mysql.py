@@ -217,7 +217,29 @@ class MySQLService:
         COMMENT='会话元数据表'
         """)
 
-        logger.info("MySQL 全部表初始化完成(documents/rag_config/chat_sessions/long_term_memories)")
+        # 技能表
+        self.execute("""
+        CREATE TABLE IF NOT EXISTS skills (
+            id            VARCHAR(64) PRIMARY KEY,
+            name          VARCHAR(128) NOT NULL UNIQUE COMMENT '技能名(唯一, 小写字母数字连字符)',
+            display_name  VARCHAR(128) DEFAULT '' COMMENT '展示名称',
+            description   VARCHAR(1024) DEFAULT '' COMMENT '一句话描述(供 LLM 判断隐式触发)',
+            version       VARCHAR(32) DEFAULT '1.0.0',
+            author        VARCHAR(128) DEFAULT '',
+            tags          VARCHAR(512) DEFAULT '' COMMENT '逗号分隔',
+            source        VARCHAR(20) DEFAULT 'imported' COMMENT 'store/imported',
+            enabled       TINYINT DEFAULT 1 COMMENT '是否启用',
+            content       MEDIUMTEXT COMMENT 'SKILL.md 正文(LLM 执行指令)',
+            file_count    INT DEFAULT 0 COMMENT '资产文件数',
+            used_count    INT DEFAULT 0 COMMENT '触发次数',
+            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_enabled (enabled),
+            INDEX idx_source (source)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='技能表'
+        """)
+        logger.info("MySQL 全部表初始化完成(documents/rag_config/chat_sessions/long_term_memories/skills)")
 
 
 # 单例

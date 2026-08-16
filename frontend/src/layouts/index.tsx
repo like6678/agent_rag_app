@@ -9,6 +9,7 @@ import {
   SettingOutlined,
   BulbOutlined,
   BarChartOutlined,
+  ApartmentOutlined,
   ThunderboltOutlined,
   BgColorsOutlined,
   UndoOutlined,
@@ -25,6 +26,7 @@ const menuItems = [
   { key: '/config', icon: <SettingOutlined />, label: 'RAG 配置' },
   { key: '/memory', icon: <BulbOutlined />, label: '长期记忆' },
   { key: '/evaluation', icon: <BarChartOutlined />, label: '系统评测' },
+  { key: '/skills', icon: <ApartmentOutlined />, label: '技能中心' },
 ];
 
 const GLASS_KEY = 'app-glass-alpha';

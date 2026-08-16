@@ -1,7 +1,7 @@
 """
 对话接口
-- POST   /api/chat                多轮对话(非流式, 支持 Function Call)
-- POST   /api/chat/stream         多轮对话(SSE 流式输出)
+- POST   /api/chat                多轮对话(非流式, 支持 Function Call + 技能)
+- POST   /api/chat/stream         多轮对话(SSE 流式输出, 打字机效果)
 - GET    /api/chat/sessions       会话列表
 - POST   /api/chat/sessions       创建新会话
 - PATCH  /api/chat/sessions/{id}  更新会话标题
@@ -22,15 +22,30 @@ from app.models.schemas import (
     ChatResponse,
     ChatHistoryResponse,
     ToolCallInfo,
+    SkillFileInfo,
 )
 from app.agent.core import agent
 from app.agent.memory import memory_store
 from app.services.session_store import session_store
-from app.services.dashscope import dashscope_service
-from app.rag.retriever import retriever
-from app.agent.tools import execute_tool, TOOLS_SCHEMA
 
 router = APIRouter()
+
+
+def _ensure_configured():
+    """初始化校验: API Key / 对话模型 / 嵌入模型未配置时拒绝对话, 引导用户先去配置页"""
+    from app.services.config_store import config_store
+    setup = config_store.get_setup_status()
+    if not setup["configured"]:
+        missing_names = {
+            "dashscope_api_key": "API Key",
+            "dashscope_chat_model": "对话模型",
+            "dashscope_embed_model": "嵌入模型",
+        }
+        labels = [missing_names.get(f, f) for f in setup["missing"]]
+        raise HTTPException(
+            status_code=400,
+            detail="尚未完成初始化配置, 请先到「RAG 配置」页填写: " + "、".join(labels),
+        )
 
 
 def _ensure_session(session_id: str, first_message: str = ""):
@@ -50,7 +65,8 @@ def _ensure_session(session_id: str, first_message: str = ""):
 # 避免 agent.chat 内的同步 LLM/检索调用阻塞事件循环(此前 def 会卡死所有并发请求)
 @router.post("", response_model=ChatResponse, summary="多轮对话(非流式)")
 def chat(req: ChatRequest):
-    """多轮对话(支持 RAG + Function Call + 长期记忆注入)"""
+    """多轮对话(支持 RAG + Function Call + 长期记忆注入 + 技能)"""
+    _ensure_configured()
     try:
         _ensure_session(req.session_id, req.message)
         result = agent.chat(
@@ -58,6 +74,8 @@ def chat(req: ChatRequest):
             user_message=req.message,
             use_rag=req.use_rag,
             user_id=req.user_id,
+            skills=req.skills,
+            auto_skill=req.auto_skill,
         )
         session_store.increment_message_count(req.session_id)
         return ChatResponse(
@@ -66,6 +84,7 @@ def chat(req: ChatRequest):
             tool_calls_made=[
                 ToolCallInfo(**tc) for tc in result.get("tool_calls_made", [])
             ],
+            files=[SkillFileInfo(**f) for f in result.get("files", [])],
         )
     except Exception as e:
         logger.error(f"对话失败: {e}")
@@ -75,80 +94,26 @@ def chat(req: ChatRequest):
 @router.post("/stream", summary="多轮对话(SSE 流式输出)")
 def chat_stream(req: ChatRequest):
     """
-    SSE 流式对话:
-    - 逐 token 返回大模型生成内容
-    - 启用 RAG 时先检索知识库增强上下文
-    - 如需 Function Call 工具循环, 请用非流式 /api/chat 接口
+    SSE 流式对话(打字机效果):
+    - 统一工具循环: 工具调用即时推送 tool_calls 事件
+    - 最终回答逐 token 推送 content 事件
+    - 结束后推送 files 事件(技能生成的文档下载链接)
     """
+    _ensure_configured()
     _ensure_session(req.session_id, req.message)
 
-    # 同步生成器: StreamingResponse 会自动放到线程池迭代, 不阻塞事件循环
     def event_generator():
         try:
-            # 1. 获取历史记忆
-            history = memory_store.get_messages(req.session_id)
-            # 根据 use_rag 选择系统提示词
-            sys_prompt = _RAG_SYSTEM_PROMPT if req.use_rag else _NORMAL_SYSTEM_PROMPT
-            messages = [{"role": "system", "content": sys_prompt}]
-            messages.extend(history)
-            messages.append({"role": "user", "content": req.message})
-
-            # 2. 记录用户消息
-            memory_store.add_message(req.session_id, "user", req.message)
-
-            # 2.5 注入长期记忆(提供 user_id 时)
-            if req.user_id:
-                try:
-                    from app.agent.core import _recall_long_term_memories
-                    ltm_context = _recall_long_term_memories(req.user_id, req.message)
-                    if ltm_context:
-                        messages.append({"role": "system", "content": ltm_context})
-                except Exception as e:
-                    logger.warning(f"流式对话长期记忆召回失败: {e}")
-
-            # 3. RAG 检索增强(如果启用)
-            rag_context = ""
-            tool_calls_info = []
-            if req.use_rag:
-                try:
-                    hits = retriever.search(req.message)
-                    if hits:
-                        rag_context = retriever.build_context(hits)
-                        tool_calls_info.append({
-                            "name": "knowledge_search",
-                            "arguments": {"query": req.message},
-                            "result_preview": rag_context[:200],
-                        })
-                        # 将检索结果作为系统上下文注入
-                        messages.insert(
-                            -1,
-                            {
-                                "role": "system",
-                                "content": f"以下是从知识库检索到的相关内容,请基于此回答:\n\n{rag_context}",
-                            },
-                        )
-                except Exception as e:
-                    logger.warning(f"流式对话 RAG 检索失败: {e}")
-
-            # 4. 发送 tool_calls 信息(如果有)
-            if tool_calls_info:
-                yield f"data: {json.dumps({'type': 'tool_calls', 'tool_calls': tool_calls_info}, ensure_ascii=False)}\n\n"
-
-            # 5. 流式调用大模型
-            full_answer = ""
-            for chunk in dashscope_service.chat_stream(messages, tools=None):
-                content = chunk.get("content", "")
-                if content:
-                    full_answer += content
-                    yield f"data: {json.dumps({'type': 'content', 'content': content}, ensure_ascii=False)}\n\n"
-
-                if chunk.get("finish_reason"):
-                    yield f"data: {json.dumps({'type': 'finish', 'finish_reason': chunk['finish_reason']}, ensure_ascii=False)}\n\n"
-
-            # 6. 保存完整回答到记忆
-            memory_store.add_message(req.session_id, "assistant", full_answer)
+            for event in agent.chat_stream(
+                session_id=req.session_id,
+                user_message=req.message,
+                use_rag=req.use_rag,
+                user_id=req.user_id,
+                skills=req.skills,
+                auto_skill=req.auto_skill,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             session_store.increment_message_count(req.session_id)
-
             yield "data: [DONE]\n\n"
         except Exception as e:
             logger.error(f"流式对话失败: {e}")
@@ -164,19 +129,6 @@ def chat_stream(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-# 流式对话系统提示词(根据 use_rag 动态切换)
-_NORMAL_SYSTEM_PROMPT = """你是一个智能助手,可以与用户进行多轮对话。
-请基于你的知识回答用户问题,回答使用中文,语言简洁清晰。
-如果没有把握,请如实说明。"""
-
-_RAG_SYSTEM_PROMPT = """你是一个智能助手,可以使用检索到的知识库内容回答用户问题。
-工作原则:
-1. 优先基于检索到的知识库内容回答,引用相关上下文
-2. 如果知识库内容能完全回答问题,基于其回答
-3. 如果知识库内容不足,可以补充你的通用知识,但要说明
-4. 回答使用中文,语言简洁清晰"""
 
 
 # ==================== 会话管理 ====================
@@ -217,7 +169,7 @@ def delete_session(session_id: str):
 
 @router.get("/history/{session_id}", response_model=ChatHistoryResponse, summary="获取会话历史")
 def get_history(session_id: str):
-    """获取指定会话的全部历史消息"""
+    """获取指定会话的全部历史消息(含技能生成文件的下载信息)"""
     messages = agent.get_history(session_id)
     return ChatHistoryResponse(session_id=session_id, messages=messages)
 

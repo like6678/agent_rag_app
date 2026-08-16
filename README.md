@@ -48,13 +48,11 @@ agent-rag-app/
 ├── README.md
 ├── data/
 │   └── uploads/                # 本地上传临时目录
+├── skills_catalog/             # 内置技能商店(8 个开箱即用技能 + 模板资产)
+├── frontend/                   # React 前端(umi + antd, 科技苹果风毛玻璃 UI)
 └── app/
     ├── main.py                 # FastAPI 入口 + 生命周期管理
     ├── config.py               # 统一配置(pydantic-settings)
-    ├── api/                    # API 接口层
-    │   ├── chat.py             #   对话接口(多轮 + Function Call)
-    │   ├── documents.py        #   文档上传/下载/删除
-    │   └── knowledge_base.py   #   知识库管理/检索测试
     ├── agent/                  # Agent 模块
     │   ├── core.py             #   Agent 核心(Function Call 循环)
     │   ├── tools.py            #   工具定义 + Schema
@@ -69,11 +67,13 @@ agent-rag-app/
     │   ├── dashscope.py        #   通义千问(OpenAI兼容接口/SSE流式/Embedding)
     │   ├── milvus.py           #   Milvus 向量库(MilvusClient API)
     │   ├── minio.py            #   MinIO 文件存储
-    │   ├── database.py         #   SQLite 文档/会话元数据(MD5去重/删查)
-    │   ├── mysql.py            #   MySQL 连接池(长期记忆结构化存储)
-    │   ├── config_store.py     #   RAG 配置存储(SQLite 持久化)
-    │   ├── session_store.py    #   会话元数据存储(SQLite)
+    │   ├── database.py         #   文档/会话元数据(MD5去重/删查)
+    │   ├── mysql.py            #   MySQL 连接池(自动建表: documents/rag_config/chat_sessions/long_term_memories/skills)
+    │   ├── config_store.py     #   RAG 配置存储(MySQL持久化 + 初始化引导 + 嵌入模型锁定)
+    │   ├── session_store.py    #   会话元数据存储(MySQL)
     │   ├── long_term_memory.py #   长期记忆(MySQL+Milvus/去重/衰减/沉淀)
+    │   ├── skill_store.py      #   技能存储(商店目录/安装/导入/卸载/资产)
+    │   ├── skill_artifacts.py  #   技能产物(MD/PDF导出/下载/TTL清理)
     │   └── evaluation.py       #   RAG 五维度评测服务
     ├── api/                    # API 接口层
     │   ├── chat.py             #   对话(流式SSE+会话管理)
@@ -81,7 +81,8 @@ agent-rag-app/
     │   ├── knowledge_base.py   #   知识库管理(统计/检索/清空)
     │   ├── config.py           #   RAG 配置管理
     │   ├── evaluation.py       #   RAG 评测接口
-    │   └── memory.py           #   长期记忆管理(增删改查/检索/沉淀/遗忘)
+    │   ├── memory.py           #   长期记忆管理(增删改查/检索/沉淀/遗忘)
+    │   └── skills.py           #   技能管理(商店/安装/导入/启停/卸载/资产/产物)
     └── models/
         └── schemas.py          #   Pydantic 请求/响应模型
 ```
@@ -93,12 +94,15 @@ agent-rag-app/
 | Web 框架 | FastAPI | 异步 HTTP 接口，自动 OpenAPI 文档，SSE 流式输出 |
 | 大模型 | 通义千问 DashScope | OpenAI 兼容接口，qwen3.7-plus 对话 + text-embedding-v3 向量化 |
 | Agent | Function Call | 大模型原生函数调用，工具循环 |
+| **技能系统** | **内置商店 + 自定义导入** | **指令型技能(SKILL.md)，显式/隐式触发，文档导出 MD/PDF** |
 | **短期记忆** | **Redis** | **滑动窗口 + 摘要压缩 + 会话 TTL，分布式安全** |
 | **长期记忆** | **MySQL + Milvus** | **结构化存储 + 语义召回，user_id 隔离，相似度去重，时间衰减遗忘** |
 | **RAG 知识库** | **Milvus(独立集合)** | **业务文档检索，独立于对话记忆** |
 | 向量数据库 | Milvus 2.4 | IVF_FLAT 索引，COSINE 相似度，MilvusClient API |
 | 文件存储 | MinIO | S3 兼容对象存储 |
-| 文档/会话元数据 | SQLite | MD5 去重 + 文档/会话删查 |
+| PDF 生成 | xhtml2pdf + reportlab | Markdown→HTML→PDF，系统中文字体，缺失降级 MD |
+| 前端 | React + umi + antd | 科技苹果风毛玻璃 UI，SSE 流式打字机 |
+| 文档/会话/配置元数据 | MySQL | MD5 去重 + 全部结构化元数据(自动建表) |
 | 编排 | Docker Compose | 一键启动全部服务(Milvus/MinIO/Redis/MySQL/App) |
 
 ## 三层记忆分层存储架构
@@ -214,7 +218,9 @@ curl -X POST http://localhost:8000/api/chat \
   -d '{
     "session_id": "test-001",
     "message": "帮我从知识库里查一下什么是 RAG",
-    "use_rag": true
+    "use_rag": true,
+    "skills": [],            // 显式指定技能 name 列表(按钮触发)
+    "auto_skill": true       // 是否允许模型按意图隐式调用已启用技能
   }'
 
 # 获取会话历史
@@ -261,6 +267,53 @@ curl http://localhost:8000/api/kb/stats
 
 # 清空知识库(重建集合)
 curl -X DELETE http://localhost:8000/api/kb/collection
+```
+
+### 技能系统
+
+```bash
+# 内置商店目录(含已安装标记)
+curl http://localhost:8000/api/skills/store
+
+# 从商店安装技能(重复安装=覆盖更新)
+curl -X POST http://localhost:8000/api/skills/install \
+  -H "Content-Type: application/json" -d '{"name": "weekly-report"}'
+
+# 导入自定义技能(.zip 内含 SKILL.md + 资产, 或单个 .md)
+curl -X POST http://localhost:8000/api/skills/import -F "file=@my-skill.zip"
+
+# 已安装列表 / 启停 / 卸载
+curl http://localhost:8000/api/skills
+curl -X PATCH http://localhost:8000/api/skills/{skill_id} -H "Content-Type: application/json" -d '{"enabled": false}'
+curl -X DELETE http://localhost:8000/api/skills/{skill_id}
+
+# 下载技能生成的文档(MD/PDF, 由对话中 export_document 产出)
+curl -OJ "http://localhost:8000/api/skills/artifacts/download?object_name=skill-outputs/..."
+```
+
+## 技能（Skill）系统
+
+在 RAG + Agent + 长期记忆之上扩展可插拔技能能力：
+
+- **应用商店**：内置 8 个开箱即用技能（周报/会议纪要/PRD/技术方案/代码审查/SQL/翻译润色/工作总结），一键安装
+- **自定义导入**：支持 ZIP（SKILL.md + 模板/资料资产）或单个 SKILL.md，含校验（大小/数量/zip-slip 路径穿越拦截/name 正则）
+- **对话集成**：显式按钮选择触发 + 隐式语言触发（模型按用户意图自动调用 `skill_<name>` 工具）
+- **文档导出**：技能生成内容可导出为 MD/PDF，存入 MinIO 返回下载链接，对话消息内展示下载按钮
+
+技能为**指令型**（SKILL.md 说明 + 资产文件，不执行任意代码）；生成文件存 `skill-outputs/` 前缀，启动自动清理 >7 天产物。
+
+SKILL.md 格式（YAML front-matter + Markdown 指令）：
+
+```markdown
+---
+name: weekly-report          # 小写字母数字连字符, 1-64 位
+display_name: 周报生成
+description: 根据本周工作内容生成结构化周报  # 供模型判断何时隐式调用
+version: 1.0.0
+tags: [办公, 文档]
+---
+# 周报生成技能
+（给大模型的执行指令...）
 ```
 
 ## 核心流程说明

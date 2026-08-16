@@ -10,6 +10,7 @@ import {
   Popconfirm,
   message,
   Typography,
+  Alert,
 } from 'antd';
 import type { UploadProps } from 'antd';
 import {
@@ -19,7 +20,8 @@ import {
   DeleteOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { docApi, DocumentInfo, DocumentProcessResult, errorMsg } from '@/services';
+import { docApi, DocumentInfo, DocumentProcessResult, configApi, ConfigStatus, errorMsg } from '@/services';
+import { useNavigate } from 'umi';
 
 const { Dragger } = Upload;
 const { Text } = Typography;
@@ -44,6 +46,8 @@ const Documents: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [docs, setDocs] = useState<DocumentInfo[]>([]);
   const [splitMethod, setSplitMethod] = useState<string>('recursive');
+  const [setup, setSetup] = useState<ConfigStatus | null>(null);
+  const navigate = useNavigate();
 
   const load = async () => {
     setLoading(true);
@@ -59,6 +63,7 @@ const Documents: React.FC = () => {
 
   useEffect(() => {
     load();
+    configApi.status().then(setSetup).catch(() => {});
   }, []);
 
   const onDelete = async (doc_id: string) => {
@@ -77,6 +82,13 @@ const Documents: React.FC = () => {
     accept: '.pdf,.txt,.md,.docx',
     action: docApi.uploadUrl,
     data: { split_method: splitMethod },
+    beforeUpload: () => {
+      if (setup && !setup.configured) {
+        message.warning('尚未完成初始化配置，请先到「RAG 配置」页填写 API Key 与嵌入模型');
+        return Upload.LIST_IGNORE;
+      }
+      return true;
+    },
     onChange(info) {
       const { status, response, name } = info.file;
       if (status === 'done') {
@@ -135,6 +147,15 @@ const Documents: React.FC = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      {setup && !setup.configured && (
+        <Alert
+          type="warning"
+          showIcon
+          message="尚未完成初始化配置"
+          description="上传文档前请先在「RAG 配置」页填写 API Key 与嵌入模型。"
+          action={<Button type="primary" onClick={() => navigate('/config')}>去配置</Button>}
+        />
+      )}
       <Card title="上传文档（MD5 自动去重 + 入库）">
         <Space style={{ marginBottom: 16 }}>
           <span>切片方式：</span>

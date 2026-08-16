@@ -15,6 +15,8 @@ import {
   message,
   Typography,
   theme,
+  Alert,
+  Select,
 } from 'antd';
 import {
   PlusOutlined,
@@ -24,8 +26,11 @@ import {
   ReloadOutlined,
   StopOutlined,
   RobotOutlined,
+  DownloadOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
-import { chatApi, Session, ToolCallInfo, errorMsg } from '@/services';
+import { chatApi, Session, ToolCallInfo, errorMsg, configApi, ConfigStatus, skillApi, SkillInfo, SkillFileInfo } from '@/services';
+import { useNavigate } from 'umi';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -34,6 +39,7 @@ interface Msg {
   role: 'user' | 'assistant';
   content: string;
   tool_calls?: ToolCallInfo[];
+  files?: SkillFileInfo[];
   pending?: boolean; // 流式生成中
 }
 
@@ -46,9 +52,14 @@ const Chat: React.FC = () => {
   const [userId, setUserId] = useState('user-001');
   const [streamMode, setStreamMode] = useState(true);
   const [sending, setSending] = useState(false);
+  const [setup, setSetup] = useState<ConfigStatus | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [skillOptions, setSkillOptions] = useState<SkillInfo[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  const [autoSkill, setAutoSkill] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  const navigate = useNavigate();
   const msgsEndRef = useRef<HTMLDivElement>(null);
   const { token } = theme.useToken();
 
@@ -76,6 +87,8 @@ const Chat: React.FC = () => {
 
   useEffect(() => {
     loadSessions();
+    configApi.status().then(setSetup).catch(() => {});
+    skillApi.list().then((list) => setSkillOptions(list.filter((x) => x.enabled))).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -91,7 +104,11 @@ const Chat: React.FC = () => {
       setMessages(
         (r.messages || [])
           .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+          .map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            files: (m as any).files || [],
+          })),
       );
     } catch (e) {
       errorMsg(e);
@@ -150,6 +167,8 @@ const Chat: React.FC = () => {
     message: string;
     use_rag: boolean;
     user_id?: string;
+    skills?: string[];
+    auto_skill?: boolean;
   }) => {
     const controller = new AbortController();
     abortRef.current = controller;
@@ -186,6 +205,8 @@ const Chat: React.FC = () => {
             } else if (obj.type === 'content') {
               const chunk: string = obj.content || '';
               patchLast((m) => ({ ...m, content: m.content + chunk }));
+            } else if (obj.type === 'files') {
+              patchLast({ files: obj.files || [] });
             } else if (obj.type === 'error') {
               throw new Error(obj.message || '流式错误');
             }
@@ -199,6 +220,11 @@ const Chat: React.FC = () => {
     }
   };
   const onSend = async () => {
+    if (setup && !setup.configured) {
+      message.warning('尚未完成初始化配置，请先到「RAG 配置」页填写 API Key 与模型');
+      navigate('/config');
+      return;
+    }
     if (!current) {
       message.warning('请先创建或选择一个会话');
       return;
@@ -212,10 +238,10 @@ const Chat: React.FC = () => {
     setSending(true);
     try {
       if (streamMode) {
-        await streamChat({ session_id: current, message: text, use_rag: useRag, user_id: userId });
+        await streamChat({ session_id: current, message: text, use_rag: useRag, user_id: userId, skills: selectedSkills, auto_skill: autoSkill });
       } else {
-        const r = await chatApi.chat({ session_id: current, message: text, use_rag: useRag, user_id: userId });
-        patchLast({ content: r.answer, tool_calls: r.tool_calls_made });
+        const r = await chatApi.chat({ session_id: current, message: text, use_rag: useRag, user_id: userId, skills: selectedSkills, auto_skill: autoSkill });
+        patchLast({ content: r.answer, tool_calls: r.tool_calls_made, files: r.files });
       }
       loadSessions();
     } catch (e) {
@@ -270,6 +296,18 @@ const Chat: React.FC = () => {
             {m.content}
             {m.pending && <span className="stream-cursor" />}
           </div>
+          {m.files && m.files.length > 0 && (
+            <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {m.files.map((f, fi) => (
+                <a key={fi} href={f.download_url} target="_blank" rel="noreferrer">
+                  <Button size="small" icon={<DownloadOutlined />} style={{ borderRadius: 10 }}>
+                    <FileTextOutlined style={{ marginRight: 4 }} />
+                    {f.name}
+                  </Button>
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -368,6 +406,19 @@ const Chat: React.FC = () => {
             <Switch checked={useRag} onChange={setUseRag} size="small" />
             <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>流式</span>
             <Switch checked={streamMode} onChange={setStreamMode} size="small" />
+            <Select
+              mode="multiple"
+              size="small"
+              maxTagCount="responsive"
+              style={{ minWidth: 160, maxWidth: 260 }}
+              placeholder="选择技能"
+              value={selectedSkills}
+              onChange={setSelectedSkills}
+              options={skillOptions.map((sk) => ({ label: sk.display_name, value: sk.name }))}
+              allowClear
+            />
+            <span style={{ color: token.colorTextSecondary, fontSize: 13 }}>自动识别</span>
+            <Switch checked={autoSkill} onChange={setAutoSkill} size="small" />
           </Space>
           <Space size={8}>
             {current && (
@@ -382,6 +433,16 @@ const Chat: React.FC = () => {
         </div>
         <div className="chat-msgs" style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
           <div style={{ width: '100%', maxWidth: 800 }}>
+            {setup && !setup.configured && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 16 }}
+                message="尚未完成初始化配置"
+                description="智能对话前请先在「RAG 配置」页填写 API Key 与对话模型。"
+                action={<Button size="small" type="primary" onClick={() => navigate('/config')}>去配置</Button>}
+              />
+            )}
             {!current ? (
               <Empty description="请选择或新建一个会话" style={{ marginTop: 80 }} />
             ) : loadingHistory ? (
@@ -414,7 +475,7 @@ const Chat: React.FC = () => {
                 onChange={(e) => setInput(e.target.value)}
                 placeholder={current ? '输入消息，Enter 发送，Shift+Enter 换行' : '请先选择会话'}
                 autoSize={{ minRows: 1, maxRows: 4 }}
-                disabled={!current || sending}
+                disabled={!current || sending || !!(setup && !setup.configured)}
                 onPressEnter={(e) => {
                   if (!e.shiftKey) {
                     e.preventDefault();
@@ -427,7 +488,7 @@ const Chat: React.FC = () => {
                   停止
                 </Button>
               ) : (
-                <Button type="primary" icon={<SendOutlined />} onClick={onSend} disabled={!current}>
+                <Button type="primary" icon={<SendOutlined />} onClick={onSend} disabled={!current || !!(setup && !setup.configured)}>
                   发送
                 </Button>
               )}

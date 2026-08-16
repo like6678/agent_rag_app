@@ -5,6 +5,51 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 
+
+# ==================== 技能 ====================
+
+class SkillInfo(BaseModel):
+    id: str = ""
+    name: str = ""
+    display_name: str = ""
+    description: str = ""
+    version: str = "1.0.0"
+    author: str = ""
+    tags: List[str] = []
+    source: str = "imported"
+    enabled: bool = True
+    file_count: int = 0
+    used_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class SkillStoreItem(BaseModel):
+    name: str = ""
+    display_name: str = ""
+    description: str = ""
+    version: str = ""
+    author: str = ""
+    tags: List[str] = []
+    installed: bool = False
+
+
+class SkillFileInfo(BaseModel):
+    name: str = ""
+    object_name: str = ""
+    download_url: str = ""
+    format: str = "md"
+    size: int = 0
+    created_at: str = ""
+
+
+class SkillInstallRequest(BaseModel):
+    name: str = Field(..., description="商店技能名, 对应 skills_catalog/<name>")
+
+
+class SkillEnableRequest(BaseModel):
+    enabled: bool = Field(..., description="true=启用 false=停用")
+
 # ==================== 对话 ====================
 
 class ChatRequest(BaseModel):
@@ -12,6 +57,8 @@ class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息", examples=["什么是 RAG?"])
     use_rag: bool = Field(True, description="是否启用 RAG + 工具调用")
     user_id: Optional[str] = Field(None, description="用户ID(可选, 提供后自动注入相关长期记忆)")
+    skills: List[str] = Field(default_factory=list, description="显式指定的技能ID/名称列表(按钮触发)")
+    auto_skill: bool = Field(True, description="是否允许模型根据用户意图隐式调用已启用技能(语言触发)")
 
 
 class ToolCallInfo(BaseModel):
@@ -24,6 +71,7 @@ class ChatResponse(BaseModel):
     session_id: str
     answer: str
     tool_calls_made: List[ToolCallInfo] = []
+    files: List[SkillFileInfo] = []
 
 
 class ChatHistoryResponse(BaseModel):

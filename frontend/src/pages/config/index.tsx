@@ -15,9 +15,11 @@ import {
   Row,
   Col,
   message,
+  Alert,
+  Tooltip,
 } from 'antd';
-import { SaveOutlined, UndoOutlined } from '@ant-design/icons';
-import { configApi, RAGConfig, ConfigOption, errorMsg } from '@/services';
+import { SaveOutlined, UndoOutlined, LockOutlined } from '@ant-design/icons';
+import { configApi, RAGConfig, ConfigOption, ConfigStatus, missingLabels, errorMsg } from '@/services';
 
 const numberOptions = (arr: number[]) =>
   arr.map((v) => ({ label: String(v), value: v }));
@@ -31,6 +33,7 @@ const ConfigPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [options, setOptions] = useState<Record<string, any>>({});
   const [config, setConfig] = useState<RAGConfig | null>(null);
+  const [status, setStatus] = useState<ConfigStatus | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -39,6 +42,8 @@ const ConfigPage: React.FC = () => {
       setOptions(data.options);
       setConfig(data.config);
       form.setFieldsValue(data.config);
+      const st = await configApi.status().catch(() => null);
+      setStatus(st);
     } catch (e) {
       errorMsg(e);
     } finally {
@@ -58,6 +63,8 @@ const ConfigPage: React.FC = () => {
       message.success(`${r.message}：${r.updated_fields.join(', ')}`);
       setConfig(r.config);
       form.setFieldsValue(r.config);
+      const st = await configApi.status().catch(() => null);
+      setStatus(st);
     } catch (e: any) {
       if (e?.errorFields) return;
       errorMsg(e);
@@ -82,6 +89,15 @@ const ConfigPage: React.FC = () => {
 
   return (
     <Spin spinning={loading}>
+      {status && !status.configured && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ maxWidth: 900, marginBottom: 16 }}
+          message="初始化配置未完成"
+          description={<span>以下参数缺失，请填写后保存：{missingLabels(status.missing)}</span>}
+        />
+      )}
       <Form
         form={form}
         layout="vertical"
@@ -158,13 +174,23 @@ const ConfigPage: React.FC = () => {
               <Form.Item
                 label={
                   <Space>
-                    嵌入模型（可选预设或自定义）
+                    嵌入模型
                     {config && <Tag color="blue">维度 {config.embed_dim}</Tag>}
+                    {status?.embed_locked && (
+                      <Tooltip title="嵌入模型仅在项目首次初始化时允许修改，设置后锁定。如需更换请先「重置默认」再重新配置。">
+                        <Tag icon={<LockOutlined />} color="orange">已锁定·仅首次可改</Tag>
+                      </Tooltip>
+                    )}
                   </Space>
                 }
                 name="dashscope_embed_model"
               >
-                <AutoComplete options={objOptions(options.embed_models || [])} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} placeholder="如 text-embedding-v3 或自定义模型名" />
+                <AutoComplete
+                  disabled={status?.embed_locked}
+                  options={objOptions(options.embed_models || [])}
+                  filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                  placeholder={status?.embed_locked ? "嵌入模型已锁定（仅首次配置时可修改）" : "如 text-embedding-v3 或自定义模型名"}
+                />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12}>

@@ -25,6 +25,12 @@ def _mask_api_key(config: dict) -> dict:
     return masked
 
 
+@router.get("/status", summary="获取初始化配置状态")
+def config_status():
+    """初始化状态: 是否已配置 API Key / 对话模型 / 嵌入模型 + 嵌入模型是否锁定"""
+    return config_store.get_setup_status()
+
+
 @router.get("", summary="获取当前 RAG 配置")
 def get_config():
     """获取当前配置 + 所有可选项 + 默认值(API Key 脱敏返回)"""
@@ -57,6 +63,9 @@ def update_config(req: ConfigUpdateRequest):
             "updated_fields": list(updates.keys()),
             "config": new_config,
         }
+    except ValueError as e:
+        # 业务规则错误(如嵌入模型已锁定): 返回 400 而非 500
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"更新配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

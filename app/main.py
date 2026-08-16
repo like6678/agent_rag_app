@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.config import settings
-from app.api import chat, documents, knowledge_base, config as config_api, evaluation as evaluation_api, memory as memory_api
+from app.api import chat, documents, knowledge_base, config as config_api, evaluation as evaluation_api, memory as memory_api, skills as skills_api
 from app.services.milvus import milvus_service
 from app.services.minio import minio_service
 from app.services.database import db_service
@@ -55,6 +55,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"长期记忆初始化失败(将在运行时重试): {e}")
 
+    # 技能产物 TTL 清理(启动时清扫 7 天前的文件)
+    try:
+        from app.services.skill_artifacts import cleanup_artifacts
+        cleanup_artifacts()
+    except Exception as e:
+        logger.warning(f"技能产物启动清理跳过: {e}")
+
     logger.info("应用启动完成")
     yield
 
@@ -86,6 +93,7 @@ app.include_router(knowledge_base.router, prefix="/api/kb", tags=["知识库"])
 app.include_router(config_api.router, prefix="/api/config", tags=["配置"])
 app.include_router(evaluation_api.router, prefix="/api/evaluation", tags=["评测"])
 app.include_router(memory_api.router, prefix="/api/memory", tags=["长期记忆"])
+app.include_router(skills_api.router, prefix="/api/skills", tags=["技能"])
 
 
 @app.get("/", tags=["健康检查"])

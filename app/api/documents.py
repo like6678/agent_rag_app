@@ -26,7 +26,7 @@ from app.models.schemas import (
 from app.services.minio import minio_service
 from app.services.milvus import milvus_service
 from app.services.database import db_service
-from app.services.config_store import get_rag_config
+from app.services.config_store import get_rag_config, config_store
 from app.rag.loader import document_loader
 from app.rag.splitter import text_splitter, llm_split_callback
 from app.rag.embedder import embedder
@@ -83,6 +83,14 @@ def upload_document(
         raise HTTPException(
             status_code=400,
             detail=f"不支持的文件格式: {ext}, 支持: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    # 初始化校验: 未配置 API Key / 嵌入模型时禁止上传, 引导用户先去配置页
+    setup = config_store.get_setup_status()
+    if any(f in setup["missing"] for f in ("dashscope_api_key", "dashscope_embed_model")):
+        raise HTTPException(
+            status_code=400,
+            detail="尚未完成初始化配置, 请先到「RAG 配置」页填写 API Key 与嵌入模型后再上传文档",
         )
 
     try:

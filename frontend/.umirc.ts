@@ -14,6 +14,7 @@ export default defineConfig({
     { path: '/config', component: './config' },
     { path: '/memory', component: './memory' },
     { path: '/evaluation', component: './evaluation' },
+    { path: '/skills', component: './skills' },
   ],
   proxy: {
     '/api': {

@@ -90,6 +90,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dashscope_base_url": "",  # 自定义 endpoint(空=默认国内版)
     "dashscope_chat_model": settings.dashscope_chat_model,
     "dashscope_embed_model": settings.dashscope_embed_model,
+    "embed_locked": False,  # 嵌入模型首次配置后锁定, 仅项目初始化时可修改
     "temperature": 0.7,
     "max_tool_iterations": settings.max_tool_iterations,
     # 向量库参数
@@ -122,7 +123,10 @@ class ConfigStore:
             row = mysql_service.query_one("SELECT config_json FROM rag_config WHERE id = 1")
             if row is None:
                 return dict(DEFAULT_CONFIG)
-            return json.loads(row["config_json"])
+            cfg = json.loads(row["config_json"])
+            # 已有嵌入模型的历史数据视为已锁定(首次配置已完成)
+            cfg.setdefault("embed_locked", bool((cfg.get("dashscope_embed_model") or "").strip()))
+            return cfg
         except Exception as e:
             logger.warning(f"读取 RAG 配置失败, 使用默认值: {e}")
             return dict(DEFAULT_CONFIG)
@@ -131,6 +135,18 @@ class ConfigStore:
         """更新配置(部分更新, 合并)"""
         row = mysql_service.query_one("SELECT config_json FROM rag_config WHERE id = 1")
         current = json.loads(row["config_json"]) if row else dict(DEFAULT_CONFIG)
+        # 历史数据兼容: 已设置过嵌入模型即视为已锁定
+        current.setdefault("embed_locked", bool((current.get("dashscope_embed_model") or "").strip()))
+
+        # 嵌入模型锁: 仅在项目首次初始化(从未设置过嵌入模型)时允许修改
+        if "dashscope_embed_model" in updates:
+            new_model = (updates["dashscope_embed_model"] or "").strip()
+            old_model = (current.get("dashscope_embed_model") or "").strip()
+            if current.get("embed_locked") and new_model != old_model:
+                raise ValueError("嵌入模型仅允许在项目首次初始化时配置, 设置后将锁定不可修改(如需更换请先重置配置)")
+            if new_model:
+                current["embed_locked"] = True
+
         # 合并更新
         current.update(updates)
         # 联动: embed_model 变化时自动更新 embed_dim
@@ -143,6 +159,27 @@ class ConfigStore:
         )
         logger.info(f"RAG 配置已更新: {list(updates.keys())}")
         return current
+
+    def get_setup_status(self) -> Dict[str, Any]:
+        """初始化状态: 是否已配置 API Key / 对话模型 / 嵌入模型, 以及嵌入模型是否已锁定"""
+        cfg = self.get_config()
+
+        def _valid_key(k: Any) -> bool:
+            s = str(k or "")
+            return bool(s) and len(s) >= 16 and "*" not in s
+
+        missing: List[str] = []
+        if not _valid_key(cfg.get("dashscope_api_key")):
+            missing.append("dashscope_api_key")
+        if not (cfg.get("dashscope_chat_model") or "").strip():
+            missing.append("dashscope_chat_model")
+        if not (cfg.get("dashscope_embed_model") or "").strip():
+            missing.append("dashscope_embed_model")
+        return {
+            "configured": len(missing) == 0,
+            "embed_locked": bool(cfg.get("embed_locked", False)),
+            "missing": missing,
+        }
 
     def reset_config(self) -> Dict[str, Any]:
         """重置为默认配置"""

@@ -43,11 +43,14 @@ export interface ChatRequest {
   message: string;
   use_rag: boolean;
   user_id?: string;
+  skills?: string[];
+  auto_skill?: boolean;
 }
 export interface ChatResponse {
   session_id: string;
   answer: string;
   tool_calls_made: ToolCallInfo[];
+  files?: SkillFileInfo[];
 }
 
 export const chatApi = {
@@ -168,6 +171,22 @@ export interface ConfigOption {
   desc: string;
 }
 
+/** 初始化配置状态: 是否已配置 API Key / 对话模型 / 嵌入模型, 以及嵌入模型是否锁定 */
+export interface ConfigStatus {
+  configured: boolean;
+  embed_locked: boolean;
+  missing: string[];
+}
+
+export const CONFIG_FIELD_LABELS: Record<string, string> = {
+  dashscope_api_key: 'API Key',
+  dashscope_chat_model: '对话模型',
+  dashscope_embed_model: '嵌入模型',
+};
+
+export const missingLabels = (missing: string[]): string =>
+  missing.map((f) => CONFIG_FIELD_LABELS[f] || f).join('、');
+
 export const configApi = {
   get: () =>
     http<{
@@ -180,6 +199,7 @@ export const configApi = {
       method: 'PUT',
       body: JSON.stringify(updates),
     }),
+  status: () => http<ConfigStatus>('/api/config/status'),
   reset: () => http<{ message: string; config: RAGConfig }>('/api/config/reset', { method: 'POST' }),
 };
 
@@ -271,3 +291,64 @@ export const healthApi = {
 export function errorMsg(e: unknown) {
   message.error(e instanceof Error ? e.message : '请求失败');
 }
+/* ============ 技能 ============ */
+export interface SkillInfo {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string;
+  version: string;
+  author: string;
+  tags: string[];
+  source: 'store' | 'imported';
+  enabled: boolean;
+  file_count: number;
+  used_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillStoreItem {
+  name: string;
+  display_name: string;
+  description: string;
+  version: string;
+  author: string;
+  tags: string[];
+  installed: boolean;
+}
+
+export interface SkillFileInfo {
+  name: string;
+  object_name: string;
+  download_url: string;
+  format: string;
+  size: number;
+  created_at: string;
+}
+
+export const skillApi = {
+  store: () => http<SkillStoreItem[]>('/api/skills/store'),
+  install: (name: string) =>
+    http<{ message: string; skill: SkillInfo }>('/api/skills/install', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  importSkill: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return fetch('/api/skills/import', { method: 'POST', body: fd }).then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || '导入失败');
+      return data as { message: string; skill: SkillInfo };
+    });
+  },
+  list: () => http<SkillInfo[]>('/api/skills'),
+  setEnabled: (id: string, enabled: boolean) =>
+    http<{ skill_id: string; enabled: boolean; message: string }>(`/api/skills/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  remove: (id: string) =>
+    http<{ skill_id: string; message: string }>(`/api/skills/${id}`, { method: 'DELETE' }),
+};

@@ -20,4 +20,5 @@ dependencies = [
     "redis>=8.1.0",
     "requests>=2.34.2",
     "uvicorn[standard]>=0.52.3",
+    "xhtml2pdf>=0.2.17",
 ]
