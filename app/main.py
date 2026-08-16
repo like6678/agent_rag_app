@@ -6,8 +6,10 @@ FastAPI 应用入口
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pathlib import Path
 from loguru import logger
 
 from app.config import settings
@@ -96,8 +98,15 @@ app.include_router(memory_api.router, prefix="/api/memory", tags=["长期记忆"
 app.include_router(skills_api.router, prefix="/api/skills", tags=["技能"])
 
 
+FRONTEND_DIST = Path(settings.frontend_dist)
+
+
 @app.get("/", tags=["健康检查"])
 async def root():
+    """根路径: 生产模式(前端已构建)返回 SPA 页面, 否则返回服务状态 JSON"""
+    index = FRONTEND_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {"status": "ok", "service": "Agent RAG App", "version": "1.0.0"}
 
 
@@ -118,3 +127,27 @@ async def health():
 @app.get("/api/health", tags=["健康检查"])
 async def health_api():
     return _health_payload()
+
+
+# ---------------- 前端静态资源托管(生产模式) ----------------
+# 当 frontend/dist 存在时, 由 FastAPI 直接托管前端:
+#   - /assets/* 与 /umi.js 等真实文件 -> 返回文件
+#   - 其余路径(SPA 路由 /chat /dashboard ...) -> 回退到 index.html
+#   - 未匹配的 /api/* -> 404 (避免把 API 错误也回退到前端)
+if FRONTEND_DIST.is_dir():
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        try:
+            candidate = (FRONTEND_DIST / full_path).resolve()
+            dist_root = FRONTEND_DIST.resolve()
+            if candidate.is_relative_to(dist_root) and candidate.is_file():
+                return FileResponse(candidate)
+        except (ValueError, OSError):
+            pass
+        index = FRONTEND_DIST / "index.html"
+        if index.is_file():
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="Not Found")

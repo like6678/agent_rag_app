@@ -41,10 +41,12 @@
 
 ```
 agent-rag-app/
-├── docker-compose.yml          # 基础设施编排(Milvus/MinIO/Redis/App)
-├── Dockerfile                  # 应用镜像
+├── docker-compose.yml          # 全栈编排(Milvus/MinIO/Redis/MySQL/App)
+├── Dockerfile                  # 多阶段镜像(前端Node构建 + Python运行)
+├── .dockerignore               # 镜像构建排除清单
 ├── requirements.txt            # Python 依赖
 ├── .env.example                # 环境变量模板
+├── deploy/                     # 生产部署(1Panel)文档 + 生产环境变量模板
 ├── README.md
 ├── data/
 │   └── uploads/                # 本地上传临时目录
@@ -166,44 +168,58 @@ cp .env.example .env
 
 获取 DashScope API Key: https://dashscope.console.aliyun.com/
 
-### 2. 一键启动
+### 2. 一键启动（全栈，推荐）
 
 ```bash
-#docker 环境安装
-docker-compose up -d
+# 复制环境变量模板并填入 DashScope API Key
+cp .env.example .env
+# 编辑 .env，填入 DASHSCOPE_API_KEY
 
-#进入minIO服务，创建Access Keys 填入 docker-compose 的 milvus 中
-# 创建documents  Buckets
+# 构建并启动全部服务（前端构建 + 后端 + Milvus/MinIO/Redis/MySQL）
+docker compose up -d --build
+```
 
+- 启动后访问 http://localhost:8000 ，由 FastAPI 直接托管前端页面（SPA），无需单独启动前端。
+- 前端已内置到应用镜像（多阶段构建），`/` 返回页面、`/api/*` 走后端接口。
 
-#uv环境安装
+### 3. 本地开发（前后端分离，仅运行基础设施）
+
+```bash
+# 只启动基础设施（不含 app）
+docker compose up -d etcd minio milvus redis mysql
+
+# 后端
 uv venv --python
-.venv\Scripts\activate   
+.venv\Scripts\activate
 uv pip install -r requirements.txt
-
+# 编辑 .env: MILVUS_HOST=localhost, MINIO_ENDPOINT=localhost:9000,
+#            REDIS_URL=redis://localhost:6379/0, MYSQL_HOST=localhost, MEMORY_BACKEND=memory
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 前端（另一个终端）
+cd frontend && npm install && npm run dev
 ```
 
 启动后会拉起以下服务：
 
 | 服务 | 端口 | 用途 |
 |------|------|------|
-| FastAPI App | 8000 | 主应用 |
-| Milvus | 19530 | 向量数据库(RAG知识库 + 长期记忆) |
-| MinIO Console | 9002 | 文件管理 Web UI |
-| MinIO S3 API | 9001 | 文件存储 API |
-| Redis | 6379 | 短期会话记忆 |
-| MySQL | 3306 | 长期记忆结构化存储 |
+| FastAPI App | 8000 | 主应用(含前端页面) |
+| Milvus | 19530(仅本机) | 向量数据库(RAG知识库 + 长期记忆) |
+| MinIO S3 API | 9000(仅本机) | 文件存储 API |
+| MinIO Console | 9001(仅本机) | 文件管理 Web UI |
+| Redis | 6379(仅本机) | 短期会话记忆 |
+| MySQL | 3306(仅本机) | 长期记忆结构化存储 |
 
-### 3. 查看服务状态
+### 4. 查看服务状态
 
 ```bash
-docker-compose ps
+docker compose ps
 # 健康检查
 curl http://localhost:8000/health
 ```
 
-### 4. 访问 API 文档
+### 5. 访问 API 文档
 
 浏览器打开: http://localhost:8000/docs (Swagger UI)
 
@@ -478,6 +494,32 @@ cp .env.example .env
 # 4. 启动
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+## 生产部署（1Panel）
+
+完整图文指南见 [deploy/1panel-deploy.md](deploy/1panel-deploy.md)。核心步骤：
+
+```bash
+# 1. 服务器安装 1Panel + Docker(面板可一键安装)
+# 2. 上传项目到服务器(排除 .venv/node_modules/data):
+tar --exclude=.venv --exclude=node_modules --exclude=frontend/node_modules \
+    --exclude=data --exclude=.git -czf agent-rag-app.tar.gz .
+scp agent-rag-app.tar.gz root@<服务器IP>:/opt/
+
+# 3. 解压并配置生产环境变量
+cd /opt/agent-rag-app && tar -xzf /opt/agent-rag-app.tar.gz
+cp deploy/.env.production .env
+vi .env   # 填入 DASHSCOPE_API_KEY, 并修改 MinIO/MySQL 密码
+
+# 4. 构建并启动
+docker compose up -d --build
+```
+
+要点：
+- **单容器方案**：前端已构建进应用镜像，FastAPI 同时托管页面与 `/api`，1Panel 只需一条反向代理规则指向 `http://127.0.0.1:8000`。
+- **端口安全**：MySQL/Redis/MinIO/Milvus 端口只绑定 `127.0.0.1`，对外仅暴露 8000（建议再加 HTTPS 反代）。
+- **数据持久化**：所有数据在命名卷中（mysql_data / milvus_data / etcd_data / minio_data / redis_data / app_data），容器重建不丢数据。
+- **升级**：`git pull && docker compose up -d --build`，表结构由启动时 `CREATE TABLE IF NOT EXISTS` 自动迁移。
 
 ## 常见问题
 

@@ -1,13 +1,29 @@
 # ============================================================
-# Agent RAG App - 基础设施编排
-# 组件: Milvus(向量库) + MinIO(文件存储) + Redis(会话记忆) + App
+# Agent RAG App - 全栈编排 (含 App 服务)
+# 组件: Milvus(向量库) + MinIO(文件存储) + Redis(会话记忆)
+#       + MySQL(长期记忆) + App(FastAPI + 前端)
+#
+# 部署:
+#   1. 复制 deploy/.env.production 为 .env 并填入 DASHSCOPE_API_KEY
+#   2. docker compose up -d --build
+#   3. 访问 http://<服务器IP>:8000
+#
+# 安全:
+#   - 基础设施端口只绑定 127.0.0.1, 不对外暴露
+#   - 仅 8000 端口对外(建议再用 1Panel 反向代理绑定域名/HTTPS)
 # ============================================================
+
+x-infra-common: &infra-common
+  restart: unless-stopped
+  networks:
+    - agent-rag-net
 
 services:
   # -------------------- Milvus 依赖: etcd --------------------
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
     container_name: agent-rag-etcd
+    <<: *infra-common
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -21,19 +37,18 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
-    networks:
-      - agent-rag-net
 
   # -------------------- MinIO: 文件存储 + Milvus 对象存储 --------------------
   minio:
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     container_name: agent-rag-minio
+    <<: *infra-common
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web Console
+      - "127.0.0.1:9000:9000"   # S3 API (仅本机)
+      - "127.0.0.1:9001:9001"   # Web Console (仅本机)
     volumes:
       - minio_data:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -42,26 +57,24 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
-    networks:
-      - agent-rag-net
 
   # -------------------- Milvus: 向量数据库 --------------------
   milvus:
     image: milvusdb/milvus:v2.5.10
     container_name: agent-rag-milvus
+    <<: *infra-common
     command: ["milvus", "run", "standalone"]
     security_opt:
       - seccomp:unconfined
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY: TxHqvJzBkND2aUIH
-      MINIO_SECRET_KEY: LU5JRtIw05bHBxKn8RNyJPH6B4jrNQpq
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_USE_SSL: "false"
       MINIO_BUCKET_NAME: aetcd
     ports:
-      - "19530:19530"  # gRPC
-      - "9091:9091"    # metrics
+      - "127.0.0.1:19530:19530"  # gRPC (仅本机调试)
     volumes:
       - milvus_data:/var/lib/milvus
     depends_on:
@@ -75,15 +88,14 @@ services:
       start_period: 90s
       timeout: 20s
       retries: 3
-    networks:
-      - agent-rag-net
 
   # -------------------- Redis: 会话记忆 (生产环境) --------------------
   redis:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7.2-alpine
     container_name: agent-rag-redis
+    <<: *infra-common
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"    # 仅本机调试
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -92,31 +104,88 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - agent-rag-net
 
   # -------------------- MySQL: 长期记忆结构化存储 --------------------
   mysql:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:8.0
     container_name: agent-rag-mysql
+    <<: *infra-common
     environment:
-      MYSQL_ROOT_PASSWORD: 123456
-      MYSQL_DATABASE: agent_rag
-#      MYSQL_USER: root
-#      MYSQL_PASSWORD: 123456
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-agent_rag}
+      MYSQL_USER: ${MYSQL_USER:-agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-agentpassword}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"    # 仅本机管理/备份
     volumes:
       - mysql_data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
       start_period: 30s
-    networks:
-      - agent-rag-net
+
+  # -------------------- App: FastAPI + 前端 --------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agent-rag-app:latest
+    container_name: agent-rag-app
+    restart: unless-stopped
+    environment:
+      # 通义千问
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      DASHSCOPE_CHAT_MODEL: ${DASHSCOPE_CHAT_MODEL:-qwen-plus}
+      DASHSCOPE_EMBED_MODEL: ${DASHSCOPE_EMBED_MODEL:-text-embedding-v3}
+      # Milvus (容器内服务名)
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      MILVUS_COLLECTION: knowledge_base
+      # MinIO (与 MinIO 容器一致)
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: documents
+      MINIO_SECURE: "false"
+      # Redis 会话记忆
+      REDIS_URL: redis://redis:6379/0
+      MEMORY_BACKEND: redis
+      # MySQL 长期记忆
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-agentpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-agent_rag}
+      # 应用
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+      UPLOAD_DIR: ./data/uploads
+      DB_PATH: ./data/app.db
+      FRONTEND_DIST: ./frontend/dist
+    ports:
+      - "8000:8000"   # 对外访问(建议经 1Panel 反代)
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      etcd:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
 
 networks:
   agent-rag-net:
@@ -128,3 +197,4 @@ volumes:
   milvus_data:
   redis_data:
   mysql_data:
+  app_data:

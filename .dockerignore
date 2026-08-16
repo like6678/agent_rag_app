@@ -1,0 +1,40 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- 虚拟环境 / 依赖 ----------
+.venv/
+venv/
+node_modules/
+frontend/node_modules/
+
+# ---------- 环境变量 (敏感信息不入镜像) ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 数据 / 日志 ----------
+data/
+volumes/
+*.log
+logs/
+
+# ---------- Git / IDE ----------
+.git/
+.gitignore
+.idea/
+.vscode/
+/*.md
+!.gitkeep
+
+# ---------- 前端构建产物 (由多阶段构建重新生成) ----------
+frontend/dist/
+
+# ---------- 其它 ----------
+.agents/
+.codex/
+*.pyc

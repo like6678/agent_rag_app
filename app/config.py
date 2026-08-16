@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     # ---- 应用 ----
     upload_dir: str = "./data/uploads"
+    frontend_dist: str = "./frontend/dist"  # 前端构建产物(生产模式静态托管)
     db_path: str = "./data/app.db"
     app_host: str = "0.0.0.0"
     app_port: int = 8000

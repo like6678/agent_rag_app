@@ -28,3 +28,9 @@ data/uploads/*
 # 日志
 *.log
 logs/
+
+# 前端构建产物
+frontend/node_modules/
+frontend/dist/
+frontend/src/.umi/
+frontend/src/.umi-production/
